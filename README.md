@@ -6,7 +6,7 @@ Download monthly reports from toggl.
 
 ## Install
 Create venv and activate:
-`python -m venv venv/`
+`python -m venv venv/`  
 `source venv/bin/activate`
 
 Install requirements:
@@ -33,7 +33,8 @@ will generate 3 reports for the previous month:
 It will also perform a series of checks:
 * check if there are any entries without description
 * check if there aren't any suspiciously long entries (>8h)
-* check if there aren't any overlapping entries
+* check if there aren't any overlapping entries  
+
 Not passing a check will display a warning but continue with report generation. 
 
 `python toggl.py 1 2020` will generate 3 reports for January 2020.
