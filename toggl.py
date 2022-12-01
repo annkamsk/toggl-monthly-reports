@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+import os
 import argparse
 import calendar
 import logging
@@ -14,6 +16,7 @@ from requests.auth import HTTPBasicAuth
 
 USERNAME = ""
 PASSWORD = ''
+SPREADSHEET_ID = ""
 
 HANDLE = ""
 COMPANY = ""
@@ -21,20 +24,28 @@ WORKSPACE_ID = ""
 
 BASE_URL = "https://api.track.toggl.com"
 
+GSHEET_URL = (
+    f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
+)
+
 
 class ReportType(Enum):
     SUM = "summary"
     DET = "details"
+    INVOICE = "invoice"
 
     def filename(self) -> str:
         if self == ReportType.DET:
             return "time_entries"
+        if self == ReportType.INVOICE:
+            return self.value
         return f"{self.value}_report"
 
 
 class FileExtension(Enum):
     CSV = "csv"
     PDF = "pdf"
+    XLSX = "xlsx"
     NONE = ""
 
 
@@ -93,9 +104,12 @@ def run(args: argparse.Namespace):
     entries = response.json()["data"]
 
     check_correctness(entries)
-    save_report(api_token, ReportType.SUM, FileExtension.PDF, month_range)
-    save_report(api_token, ReportType.DET, FileExtension.PDF, month_range)
-    save_report(api_token, ReportType.DET, FileExtension.CSV, month_range)
+    download_report(api_token, ReportType.SUM, FileExtension.PDF, month_range)
+    download_report(api_token, ReportType.DET, FileExtension.PDF, month_range)
+    download_report(api_token, ReportType.DET, FileExtension.CSV, month_range)
+
+    if SPREADSHEET_ID:
+        download_invoice(ReportType.INVOICE, FileExtension.XLSX, month_range)
 
 
 def authenticate(user: str, password: str) -> str:
@@ -128,7 +142,7 @@ def get_report(
     }
     url = (
         f"{BASE_URL}/reports/api/v2/"
-        f"{report_type.value}{'.' if file_ext != FileExtension.NONE else ''}{file_ext.value}"
+        f"{report_type.value}{'.' if file_ext != FileExtension.NONE else ''}{file_ext.value}"  # noqa
     )
 
     response = requests.get(
@@ -155,7 +169,8 @@ def check_reasonable_time(entries: List):
         hours = entry["dur"] / 3600000
         if hours > 8:
             logging.warning(
-                f"Entry: {entry['description']} at {entry['start']} lasted for at least {hours}."
+                f"Entry: {entry['description']} at {entry['start']} "
+                f"lasted for at least {hours}."
             )
 
 
@@ -173,18 +188,43 @@ def check_if_overlapping(entries: List):
     for int1, int2 in zip(time_intervals_sorted, time_intervals_sorted[1:]):
         if int2.start < int1.end:
             logging.warning(
-                f"Entries: {int1.description} at {int1.end}, {int2.description} at {int2.start} are overlapping."
+                f"Entries: {int1.description} at {int1.end}, {int2.description} at "
+                f"{int2.start} are overlapping."
             )
 
 
-def save_report(
+def download_report(
     api_token: str,
     report_type: ReportType,
     file_ext: FileExtension,
     month_range: MonthRange,
 ) -> None:
     response = get_report(api_token, report_type, file_ext, month_range)
-    filename = f"{COMPANY}_{HANDLE}_{report_type.filename()}_{month_range.start}_to_{month_range.end}.{file_ext.value}"
+    save_response(response, report_type, file_ext, month_range)
+
+
+def download_invoice(
+    report_type: ReportType,
+    file_ext: FileExtension,
+    month_range: MonthRange,
+) -> None:
+    response = requests.get(GSHEET_URL)
+    response.raise_for_status()
+    save_response(response, report_type, file_ext, month_range)
+
+
+def save_response(
+    response: Response,
+    report_type: ReportType,
+    file_ext: FileExtension,
+    month_range: MonthRange,
+) -> None:
+    directory = f"reports/{month_range.month}.{month_range.year}/"
+    filename = (
+        f"{directory}{COMPANY}_{HANDLE}_{report_type.filename()}"
+        f"_{month_range.start}_to_{month_range.end}.{file_ext.value}"
+    )
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, "wb+") as report:
         report.write(response.content)
 

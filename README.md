@@ -21,14 +21,20 @@ First, set constant variables at the top of the file:
 
 * HANDLE: your nickname, appearing in the filename eg. ak
 * COMPANY: company name, appearing in the filename eg. QED
+* SPREADSHEET_ID: id of the google spreadsheet with the invoice. You can get it from URL address of the sheet. Leave blank if you don't want to download it.
 
 ## Run
 `python toggl.py`
 
-will generate 3 reports for the previous month:
+will generate the following reports for the previous month:
 * summary pdf report
 * summary csv report
 * detailed csv report
+* [optionally] download google sheet invoice
+
+Please note that it does not fill in the invoice with total hours, you need to do
+it yourself *before* running the script. It only downloads the sheet and saves it
+under a correct name in the reports folder.
 
 It will also perform a series of checks:
 * check if there are any entries without description
@@ -38,3 +44,4 @@ It will also perform a series of checks:
 Not passing a check will display a warning but continue with report generation. 
 
 `python toggl.py 1 2020` will generate 3 reports for January 2020.
+Mind that script always takes the latest available version of gsheet invoice.
