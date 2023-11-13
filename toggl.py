@@ -15,7 +15,7 @@ from requests.auth import HTTPBasicAuth
 
 
 USERNAME = ""
-PASSWORD = ''
+PASSWORD = ""
 SPREADSHEET_ID = ""
 
 HANDLE = ""
@@ -166,11 +166,10 @@ def check_if_empty(entries: List):
 
 def check_reasonable_time(entries: List):
     for entry in entries:
-        hours = entry["dur"] / 3600000
+        hours = round(entry["dur"] / 3600000, 2)
         if hours > 8:
             logging.warning(
-                f"Entry: {entry['description']} at {entry['start']} "
-                f"lasted for at least {hours}."
+                f"Entry: {entry['description']} at {entry['start']} lasted {hours}h."
             )
 
 
