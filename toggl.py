@@ -3,7 +3,6 @@ import os
 import argparse
 import calendar
 import logging
-from collections import namedtuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -11,7 +10,6 @@ from typing import List, Optional
 
 import requests
 from requests import Response
-from requests.auth import HTTPBasicAuth
 
 
 USERNAME = ""
@@ -23,15 +21,22 @@ COMPANY = ""
 WORKSPACE_ID = ""
 
 BASE_URL = "https://api.track.toggl.com"
+API_URL = f"{BASE_URL}/api/v9"
+REPORTS_URL = (
+    BASE_URL
+    + "/reports/api/v3/workspace/{workspace_id}/{report_type}/time_entries{extension}"
+)
 
 GSHEET_URL = (
     f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
 )
 
+SECONDS_IN_H = 3600
+
 
 class ReportType(Enum):
     SUM = "summary"
-    DET = "details"
+    DET = "search"
     INVOICE = "invoice"
 
     def filename(self) -> str:
@@ -43,9 +48,9 @@ class ReportType(Enum):
 
 
 class FileExtension(Enum):
-    CSV = "csv"
-    PDF = "pdf"
-    XLSX = "xlsx"
+    CSV = ".csv"
+    PDF = ".pdf"
+    XLSX = ".xlsx"
     NONE = ""
 
 
@@ -75,6 +80,15 @@ class MonthRange:
         self._end = self._start + timedelta(days=self.days - 1)
 
 
+@dataclass
+class TimeEntry:
+    project_id: Optional[int]
+    description: str
+    start: datetime
+    stop: datetime
+    seconds: int
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Downloads your monthly toggl reports."
@@ -98,107 +112,114 @@ def parse_args():
 
 def run(args: argparse.Namespace):
     month_range = MonthRange(args.month, args.year)
-    api_token = authenticate(USERNAME, PASSWORD)
 
-    response = get_report(api_token, ReportType.DET, FileExtension.NONE, month_range)
-    entries = response.json()["data"]
+    check_correctness(month_range)
 
-    check_correctness(entries)
-    download_report(api_token, ReportType.SUM, FileExtension.PDF, month_range)
-    download_report(api_token, ReportType.DET, FileExtension.PDF, month_range)
-    download_report(api_token, ReportType.DET, FileExtension.CSV, month_range)
+    download_report(USERNAME, PASSWORD, ReportType.SUM, FileExtension.PDF, month_range)
+    download_report(USERNAME, PASSWORD, ReportType.DET, FileExtension.PDF, month_range)
+    download_report(USERNAME, PASSWORD, ReportType.DET, FileExtension.CSV, month_range)
 
     if SPREADSHEET_ID:
         download_invoice(ReportType.INVOICE, FileExtension.XLSX, month_range)
 
 
-def authenticate(user: str, password: str) -> str:
-    response = requests.get(f"{BASE_URL}/api/v8/me", auth=HTTPBasicAuth(user, password))
-    response.raise_for_status()
-    return response.json()["data"]["api_token"]
-
-
-def check_correctness(entries: List) -> None:
+def check_correctness(month_range: MonthRange) -> None:
+    time_entries = get_time_entries(month_range)
     try:
-        check_if_empty(entries)
-        check_reasonable_time(entries)
-        check_if_overlapping(entries)
+        check_if_empty(time_entries)
+        check_reasonable_time(time_entries)
+        check_if_overlapping(time_entries)
     except Exception as e:
         logging.warning(f"Raised exception {e} while checking for correctness.")
 
 
+def get_time_entries(month_range: MonthRange) -> List[TimeEntry]:
+    """
+    Download the list of time entries grouped by tasks and parse it
+    to get a flat list of entries with their project and description.
+    """
+    response = get_report(
+        USERNAME, PASSWORD, ReportType.DET, FileExtension.NONE, month_range
+    )
+    tasks = response.json()
+    time_entries = []
+    for task in tasks:
+        for time_entry in task["time_entries"]:
+            task_with_time_entry = {
+                "project_id": task["project_id"],
+                "description": task["description"],
+                "start": datetime.fromisoformat(time_entry["start"]),
+                "stop": datetime.fromisoformat(time_entry["stop"]),
+                "seconds": time_entry["seconds"],
+            }
+            time_entries.append(TimeEntry(**task_with_time_entry))
+    return time_entries
+
+
 def get_report(
-    api_token: str,
+    user: str,
+    password: str,
     report_type: ReportType,
     file_ext: FileExtension,
     month_range: MonthRange,
 ) -> Response:
-    # docs: https://github.com/toggl/toggl_api_docs/blob/master/reports.md
-    params = {
-        "since": month_range.start,
-        "until": month_range.end,
-        "workspace_id": WORKSPACE_ID,
-        "user_agent": USERNAME,
+    # docs: https://developers.track.toggl.space/docs/reports/
+    body = {
+        "start_date": month_range.start,
+        "end_date": month_range.end,
     }
-    url = (
-        f"{BASE_URL}/reports/api/v2/"
-        f"{report_type.value}{'.' if file_ext != FileExtension.NONE else ''}{file_ext.value}"  # noqa
+    url = REPORTS_URL.format(
+        workspace_id=WORKSPACE_ID,
+        report_type=report_type.value,
+        extension=file_ext.value,
     )
-
-    response = requests.get(
-        url, params=params, auth=HTTPBasicAuth(api_token, "api_token")
-    )
+    response = requests.post(url, json=body, auth=(user, password))
     response.raise_for_status()
     return response
 
 
-def check_if_empty(entries: List):
+def check_if_empty(entries: List[TimeEntry]) -> None:
     for entry in entries:
-        if not entry["description"]:
+        if not entry.description:
             logging.warning(
-                f"Entry: {entry['project']} at {entry['start']} has empty description."
+                f"Entry: {entry.project_id} at {entry.start} has empty description."
             )
-        if not entry["project"]:
+        if entry.project_id is None:
             logging.warning(
-                f"Entry: {entry['description']} at {entry['start']} has empty project."
+                f"Entry: {entry.description} at {entry.start} has empty project."
             )
 
 
-def check_reasonable_time(entries: List):
+def check_reasonable_time(entries: List[TimeEntry]) -> None:
+    """
+    Displays a warning for entries that lasted over 8h.
+    """
     for entry in entries:
-        hours = round(entry["dur"] / 3600000, 2)
+        hours = round(entry.seconds / SECONDS_IN_H, 2)
         if hours > 8:
             logging.warning(
-                f"Entry: {entry['description']} at {entry['start']} lasted {hours}h."
+                f"Entry: {entry.description} at {entry.start} lasted {hours}h."
             )
 
 
-def check_if_overlapping(entries: List):
-    named_interval = namedtuple("named_interval", ["start", "end", "description"])
-    time_intervals = [
-        named_interval(
-            datetime.fromisoformat(entry["start"]),
-            datetime.fromisoformat(entry["end"]),
-            entry["description"],
-        )
-        for entry in entries
-    ]
-    time_intervals_sorted = sorted(time_intervals)
+def check_if_overlapping(entries: List[TimeEntry]) -> None:
+    time_intervals_sorted = sorted(entries, key=lambda entry: (entry.start, entry.stop))
     for int1, int2 in zip(time_intervals_sorted, time_intervals_sorted[1:]):
-        if int2.start < int1.end:
+        if int2.start < int1.stop:
             logging.warning(
-                f"Entries: {int1.description} at {int1.end}, {int2.description} at "
+                f"Entries: {int1.description} at {int1.stop}, {int2.description} at "
                 f"{int2.start} are overlapping."
             )
 
 
 def download_report(
-    api_token: str,
+    user: str,
+    password: str,
     report_type: ReportType,
     file_ext: FileExtension,
     month_range: MonthRange,
 ) -> None:
-    response = get_report(api_token, report_type, file_ext, month_range)
+    response = get_report(user, password, report_type, file_ext, month_range)
     save_response(response, report_type, file_ext, month_range)
 
 
