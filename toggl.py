@@ -242,7 +242,7 @@ def save_response(
     directory = f"reports/{month_range.month}.{month_range.year}/"
     filename = (
         f"{directory}{COMPANY}_{HANDLE}_{report_type.filename()}"
-        f"_{month_range.start}_to_{month_range.end}.{file_ext.value}"
+        f"_{month_range.start}_to_{month_range.end}{file_ext.value}"
     )
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, "wb+") as report:
